@@ -1,0 +1,27 @@
+# Core dependencies
+pandas>=1.5.0
+numpy>=1.20.0
+streamlit>=1.20.0
+
+# LangChain and Groq integration
+langchain>=0.0.267
+langchain-groq>=0.1.0
+groq>=0.4.0
+
+# Vector store
+faiss-cpu>=1.7.0
+
+# Embeddings options (choose one)
+sentence-transformers>=2.2.2
+# huggingface_hub==0.19.4  # Specific version to avoid compatibility issues
+
+# Alternative embedding options
+scikit-learn>=1.0.0  # For TF-IDF embeddings
+# fastembed>=0.1.0  # Lightweight embedding option
+
+# Visualization
+plotly>=5.10.0
+
+# Optional dependencies
+python-dotenv>=0.19.0  # For environment variable management
+typing-extensions>=4.0.0  # For enhanced type hints
