@@ -518,7 +518,7 @@ class TwitterAnalyzer:
 
 # Streamlit app
 def main():
-    st.set_page_config(page_title="Twitter Data Analyzer", layout="wide", page_icon="🐦")
+    st.set_page_config(page_title="Showtime Twitter Data Analyzer", layout="wide", page_icon="🐦")
     
     st.title("🐦 Twitter Data Analyzer")
     st.markdown("Analyze tweet data with statistical and semantic analysis")
