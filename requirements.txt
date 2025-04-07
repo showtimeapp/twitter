@@ -6,6 +6,7 @@ streamlit>=1.20.0
 # LangChain and Groq integration
 langchain>=0.0.267
 langchain-groq>=0.1.0
+langchain-community>=0.0.10
 groq>=0.4.0
 
 # Vector store
