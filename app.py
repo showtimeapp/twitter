@@ -520,7 +520,7 @@ class TwitterAnalyzer:
 def main():
     st.set_page_config(page_title="Showtime Twitter Data Analyzer", layout="wide", page_icon="🐦")
     
-    st.title("🐦 Twitter Data Analyzer")
+    st.title("🐦 Showtime Twitter Data Analyzer")
     st.markdown("Analyze tweet data with statistical and semantic analysis")
     
     # Initialize session state for conversation history
