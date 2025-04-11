@@ -14,6 +14,9 @@ import os
 from typing import Dict, List, Any
 import plotly.express as px
 import plotly.graph_objects as go
+import wikipedia
+import re
+from difflib import get_close_matches
 
 # Set fixed Groq API key
 os.environ["GROQ_API_KEY"] = "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"
@@ -80,6 +83,99 @@ class TwitterAnalyzer:
         
         # Initialize vector database for RAG
         self._initialize_vector_store()
+        
+        # Store Wikipedia data cache
+        self.wiki_cache = {}
+
+    def get_wikipedia_data(self, entity_name):
+        """
+        Fetch data about an entity from Wikipedia.
+        
+        Args:
+            entity_name: Name of the entity to search for
+            
+        Returns:
+            Dictionary containing title and content, or None if not found
+        """
+        # Check if we already fetched this entity
+        if entity_name in self.wiki_cache:
+            return self.wiki_cache[entity_name]
+        
+        try:
+            # Try to get the Wikipedia page
+            page = wikipedia.page(entity_name, auto_suggest=True)
+            wiki_data = {
+                "title": page.title,
+                "content": page.content,
+                "url": page.url
+            }
+            
+            # Cache the result
+            self.wiki_cache[entity_name] = wiki_data
+            return wiki_data
+            
+        except wikipedia.exceptions.DisambiguationError as e:
+            # Handle disambiguation by taking the first option
+            try:
+                if e.options:
+                    page = wikipedia.page(e.options[0], auto_suggest=False)
+                    wiki_data = {
+                        "title": page.title,
+                        "content": page.content,
+                        "url": page.url
+                    }
+                    self.wiki_cache[entity_name] = wiki_data
+                    return wiki_data
+            except:
+                pass
+            return None
+            
+        except wikipedia.exceptions.PageError:
+            # Page not found
+            return None
+            
+        except Exception as e:
+            # Other errors
+            print(f"Wikipedia error for {entity_name}: {str(e)}")
+            return None
+
+    def extract_entities(self, question):
+        """
+        Extract potential named entities from a question.
+        
+        Args:
+            question: The question text
+            
+        Returns:
+            List of potential entity names
+        """
+        # First, check if any user in our dataset is mentioned
+        user_names = self.df['fullname'].unique()
+        mentioned_users = []
+        
+        for user in user_names:
+            if user.lower() in question.lower():
+                mentioned_users.append(user)
+        
+        # If we found users in our dataset, return them
+        if mentioned_users:
+            return mentioned_users
+        
+        # Otherwise, try to extract other potential entities
+        # This is a simple approach - in production, you might use NER models
+        # Look for capitalized phrases which might be names
+        potential_entities = re.findall(r'([A-Z][a-z]+(?: [A-Z][a-z]+)*)', question)
+        
+        # Filter out common words that might be capitalized
+        common_words = ["what", "who", "where", "when", "why", "how", "is", "are", "do", "does", 
+                        "did", "can", "could", "would", "should", "may", "might", "must", "the"]
+        
+        filtered_entities = []
+        for entity in potential_entities:
+            if entity.lower() not in common_words and len(entity) > 3:
+                filtered_entities.append(entity)
+                
+        return filtered_entities
         
     def _initialize_vector_store(self):
         """
@@ -238,7 +334,8 @@ class TwitterAnalyzer:
     
     def answer_semantic_question(self, question: str) -> str:
         """
-        Answer semantic questions about tweet content using Groq LLM with RAG.
+        Answer semantic questions about tweet content using Groq LLM with RAG,
+        enhanced with Wikipedia data.
         
         Args:
             question: The semantic question to answer
@@ -253,6 +350,22 @@ class TwitterAnalyzer:
         if not self.vector_store:
             return "Unable to perform semantic analysis. Vector store is not initialized."
             
+        # Extract potential entities from the question
+        entities = self.extract_entities(question)
+        
+        # Get Wikipedia data for mentioned entities
+        wiki_context = ""
+        for entity in entities:
+            wiki_data = self.get_wikipedia_data(entity)
+            if wiki_data:
+                # Extract only the first few paragraphs to keep context manageable
+                paragraphs = wiki_data["content"].split("\n\n")
+                intro = "\n\n".join(paragraphs[:3])  # First three paragraphs
+                
+                wiki_context += f"\nWikipedia information about {wiki_data['title']}:\n"
+                wiki_context += f"{intro}\n"
+                wiki_context += f"Source: {wiki_data['url']}\n\n"
+        
         # Get user-specific mentions for more targeted retrieval
         user_names = self.df['fullname'].unique()
         mentioned_users = []
@@ -351,27 +464,36 @@ class TwitterAnalyzer:
                         for i, (_, row) in enumerate(user_df.iterrows(), 1):
                             context += f"{i}. \"{row['tweet']}\"\n"
             
+            # Combine tweet context and Wikipedia context
+            combined_context = context
+            if wiki_context:
+                combined_context += "\n" + wiki_context
+            
             # Create system prompt with explicit instructions based on question type
             system_prompt = f"""
-            You are an AI assistant that performs detailed analysis of Twitter data. Below is the relevant context from the Twitter dataset:
+            You are an AI assistant that performs detailed analysis of Twitter data, 
+            enhanced with Wikipedia information when available. Below is the relevant context:
             
-            {context}
+            {combined_context}
             
             Guidelines for your analysis:
-            1. Base your answer ONLY on the provided tweets and data - do not make up information not present in the context.
-            2. Provide evidence for your claims by directly referencing specific tweets.
+            1. Base your answer on the provided tweets, statistics, and Wikipedia data - do not make up information.
+            2. Provide evidence for your claims by directly referencing specific tweets or Wikipedia information.
             3. Use exact quotes when discussing tweet content.
             4. Include relevant engagement metrics (likes, replies, retweets) when they support your analysis.
-            5. Be concise but thorough in your analysis.
+            5. When Wikipedia information is available, incorporate it to provide broader context about people, organizations, or topics mentioned.
+            6. Be concise but thorough in your analysis.
             
             If you're analyzing themes or focus areas:
             - Identify the most common topics across the tweets
             - Look for recurring words, hashtags, or ideas
             - Consider the issues that get the most engagement
+            - Connect tweet topics to biographical or background information when available
             
             If you're comparing users:
             - Highlight differences in content focus, tone, and engagement metrics
             - Note any common interests or diverging opinions between them
+            - Use background information to provide context for their positions
             
             If the question relates to statistics, provide precise numbers from the context.
             
@@ -389,7 +511,7 @@ class TwitterAnalyzer:
             return response.content
         except Exception as e:
             return f"Error in semantic analysis: {str(e)}"
-    
+       
     def analyze(self, question: str) -> str:
         """
         Main method to analyze questions and route them to appropriate handlers.
@@ -515,12 +637,11 @@ class TwitterAnalyzer:
         
         return fig, None
 
-
 # Streamlit app
 def main():
-    st.set_page_config(page_title="Showtime Twitter Data Analyzer", layout="wide", page_icon="🐦")
+    st.set_page_config(page_title="Twitter Data Analyzer", layout="wide", page_icon="🐦")
     
-    st.title("🐦 Showtime Twitter Data Analyzer")
+    st.title("🐦 Twitter Data Analyzer")
     st.markdown("Analyze tweet data with statistical and semantic analysis")
     
     # Initialize session state for conversation history
