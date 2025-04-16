@@ -17,9 +17,60 @@ import plotly.graph_objects as go
 import wikipedia
 import re
 from difflib import get_close_matches
+import requests
+import json
+from fpdf import FPDF
+import base64
+import io
+from datetime import datetime
 
 # Set fixed Groq API key
 os.environ["GROQ_API_KEY"] = "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"
+
+class ReportPDF(FPDF):
+    """Custom PDF class with header and footer"""
+    def header(self):
+        # Set font for header
+        self.set_font('Arial', 'B', 12)
+        # Title
+        self.cell(0, 10, 'Twitter Analysis Report', 0, 1, 'C')
+        # Line break
+        self.ln(5)
+
+    def footer(self):
+        # Position cursor at 1.5 cm from bottom
+        self.set_y(-15)
+        # Set font for footer
+        self.set_font('Arial', 'I', 8)
+        # Page number
+        self.cell(0, 10, f'Page {self.page_no()}/{{nb}}', 0, 0, 'C')
+        # Add date
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        self.cell(0, 10, date_str, 0, 0, 'R')
+
+    def chapter_title(self, title):
+        self.set_font('Arial', 'B', 14)
+        self.set_fill_color(200, 220, 255)
+        self.cell(0, 10, title, 0, 1, 'L', 1)
+        self.ln(5)
+
+    def chapter_body(self, text):
+        self.set_font('Arial', '', 11)
+        # Process text to properly handle paragraphs
+        text = text.encode('latin-1', 'replace').decode('latin-1')
+        self.multi_cell(0, 5, text)
+        self.ln(5)
+
+    def section_title(self, title):
+        self.set_font('Arial', 'B', 12)
+        self.cell(0, 8, title, 0, 1, 'L')
+        self.ln(2)
+
+    def info_row(self, label, value):
+        self.set_font('Arial', 'B', 11)
+        self.cell(50, 6, label, 0, 0, 'L')
+        self.set_font('Arial', '', 11)
+        self.multi_cell(0, 6, value)
 
 class SimpleEmbeddings(Embeddings):
     """A simple embedding class using TF-IDF."""
@@ -86,7 +137,112 @@ class TwitterAnalyzer:
         
         # Store Wikipedia data cache
         self.wiki_cache = {}
+        
+        # Store Gemini news cache
+        self.news_cache = {}
+        
+        # Gemini configuration with fixed API key
+        self.gemini_api_key = "AIzaSyBHBFb7iJ4VNSazi_oNZ50pwSo8suH7Y4M"
+        self.gemini_model = "models/gemini-2.5-pro-exp-03-25"
 
+    def get_news_with_gemini_search(self, query):
+        """
+        Get latest news about a topic using Gemini's search capability.
+        
+        Args:
+            query: The query to search for
+            
+        Returns:
+            News content as string, or None if an error occurs
+        """
+        # Check if we already have this query cached
+        if query in self.news_cache:
+            return self.news_cache[query]
+            
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/{self.gemini_model}:generateContent?key={self.gemini_api_key}"
+            headers = {
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [{"text": f"Get detailed and latest news related to: {query}. Include sources if available."}]
+                    }
+                ],
+                "tools": [
+                    {
+                        "googleSearch": {}
+                    }
+                ]
+            }
+            
+            response = requests.post(url, headers=headers, json=payload)
+            
+            if response.status_code == 200:
+                data = response.json()
+                news_content = data['candidates'][0]['content']['parts'][0]['text']
+                
+                # Cache the result
+                self.news_cache[query] = news_content
+                return news_content
+            else:
+                print(f"Gemini API Error: {response.text}")
+                return None
+        except Exception as e:
+            print(f"Error fetching news: {str(e)}")
+            return None
+
+    def get_with_gemini_search(self, query):
+        """
+        Get latest news about a topic using Gemini's search capability.
+        
+        Args:
+            query: The query to search for
+            
+        Returns:
+            News content as string, or None if an error occurs
+        """
+        # Check if we already have this query cached
+        if query in self.news_cache:
+            return self.news_cache[query]
+            
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/{self.gemini_model}:generateContent?key={self.gemini_api_key}"
+            headers = {
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [{"text": f"{query}."}]
+                    }
+                ],
+                "tools": [
+                    {
+                        "googleSearch": {}
+                    }
+                ]
+            }
+            
+            response = requests.post(url, headers=headers, json=payload)
+            
+            if response.status_code == 200:
+                data = response.json()
+                news_content = data['candidates'][0]['content']['parts'][0]['text']
+                
+                # Cache the result
+                self.news_cache[query] = news_content
+                return news_content
+            else:
+                print(f"Gemini API Error: {response.text}")
+                return None
+        except Exception as e:
+            print(f"Error fetching news: {str(e)}")
+            return None
+        
     def get_wikipedia_data(self, entity_name):
         """
         Fetch data about an entity from Wikipedia.
@@ -335,7 +491,7 @@ class TwitterAnalyzer:
     def answer_semantic_question(self, question: str) -> str:
         """
         Answer semantic questions about tweet content using Groq LLM with RAG,
-        enhanced with Wikipedia data.
+        enhanced with Wikipedia data and latest news.
         
         Args:
             question: The semantic question to answer
@@ -364,7 +520,29 @@ class TwitterAnalyzer:
                 
                 wiki_context += f"\nWikipedia information about {wiki_data['title']}:\n"
                 wiki_context += f"{intro}\n"
-                wiki_context += f"Source: {wiki_data['url']}\n\n"
+                # wiki_context += f"Source: {wiki_data['url']}\n\n"
+        
+        # # Get news context for entities and their relationships
+        # news_context = ""
+        # # First try to get news for individual entities
+        # for entity in entities:
+        #     news = self.get_news_with_gemini_search(entity)
+        #     if news:
+        #         news_context += f"\nLatest news about {entity}:\n{news}\n\n"
+        
+        # # If the question seems to be about a relationship between entities, search for that
+        # if len(entities) >= 2 and any(term in question_lower for term in ["relation", "connection", "about", "against", "between", "and"]):
+        #     relationship_query = " and ".join(entities[:2])  # Take first two entities
+        #     news = self.get_news_with_gemini_search(relationship_query)
+        #     if news:
+        #         news_context += f"\nLatest news about {relationship_query}:\n{news}\n\n"
+        
+        # # If the question itself seems focused, use it directly as a news query
+        # specific_terms = ["why", "how", "what happened", "incident", "event", "scandal", "controversy"]
+        # if any(term in question_lower for term in specific_terms):
+        #     news = self.get_news_with_gemini_search(question)
+        #     if news:
+        #         news_context += f"\nLatest news related to the question:\n{news}\n\n"
         
         # Get user-specific mentions for more targeted retrieval
         user_names = self.df['fullname'].unique()
@@ -464,10 +642,12 @@ class TwitterAnalyzer:
                         for i, (_, row) in enumerate(user_df.iterrows(), 1):
                             context += f"{i}. \"{row['tweet']}\"\n"
             
-            # Combine tweet context and Wikipedia context
+            # Combine tweet context, Wikipedia context, and news context
             combined_context = context
             if wiki_context:
                 combined_context += "\n" + wiki_context
+            # if news_context:
+            #     combined_context += "\n" + news_context
             
             # Create system prompt with explicit instructions based on question type
             system_prompt = f"""
@@ -477,18 +657,20 @@ class TwitterAnalyzer:
             {combined_context}
             
             Guidelines for your analysis:
-            1. Base your answer on the provided tweets, statistics, and Wikipedia data - do not make up information.
+            1. Base your answer on the provided tweets, statistics, Wikipedia data - do not make up information.
             2. Provide evidence for your claims by directly referencing specific tweets or Wikipedia information.
             3. Use exact quotes when discussing tweet content.
             4. Include relevant engagement metrics (likes, replies, retweets) when they support your analysis.
-            5. When Wikipedia information is available, incorporate it to provide broader context about people, organizations, or topics mentioned.
-            6. Be concise but thorough in your analysis.
+            5. When Wikipedia information or news is available, incorporate it to provide broader context about people, organizations, or topics mentioned.
+            6. If the latest news provides insights into current events related to the question, use that information to contextualize the tweets.
+            7. Be concise but thorough in your analysis.
             
             If you're analyzing themes or focus areas:
             - Identify the most common topics across the tweets
             - Look for recurring words, hashtags, or ideas
             - Consider the issues that get the most engagement
             - Connect tweet topics to biographical or background information when available
+            - If available, use latest news to see how the tweets relate to current events
             
             If you're comparing users:
             - Highlight differences in content focus, tone, and engagement metrics
@@ -511,7 +693,7 @@ class TwitterAnalyzer:
             return response.content
         except Exception as e:
             return f"Error in semantic analysis: {str(e)}"
-       
+
     def analyze(self, question: str) -> str:
         """
         Main method to analyze questions and route them to appropriate handlers.
@@ -637,6 +819,244 @@ class TwitterAnalyzer:
         
         return fig, None
 
+    def get_news_analysis(self, entities,question: str) -> str:
+        """Get news analysis for extracted entities"""
+        # news_analysis = []
+        # for entity in entities:
+        #     news = self.get_news_with_gemini_search(entity)
+        #     if news:
+        #         news_analysis.append(f"**Latest news about {entity}:**\n{news}")
+        question_lower = question.lower()
+        # Get news context for entities and their relationships
+        news_analysis = []
+        # First try to get news for individual entities
+        for entity in entities:
+            news = self.get_news_with_gemini_search(question)
+            if news:
+                news_analysis.append(f"\nLatest news related to the question:\n{news}\n\n")
+        
+        # # If the question seems to be about a relationship between entities, search for that
+        # if len(entities) >= 2 and any(term in question_lower for term in ["relation", "connection", "about", "against", "between", "and"]):
+        #     relationship_query = " and ".join(entities[:2])  # Take first two entities
+        #     news = self.get_news_with_gemini_search(relationship_query)
+        #     if news:
+        #         news_analysis.append(f"\nLatest news about {relationship_query}:\n{news}\n\n")
+        
+        # # If the question itself seems focused, use it directly as a news query
+        # specific_terms = ["why", "how", "what happened", "incident", "event", "scandal", "controversy"]
+        # if any(term in question_lower for term in specific_terms):
+        #     news = self.get_news_with_gemini_search(question)
+        #     if news:
+        #         news_analysis.append(f"\nLatest news related to the question:\n{news}\n\n")
+        return "\n\n".join(news_analysis)
+    
+def generate_person_pdf(analyzer, person_name, question, answer, news_analysis=None):
+    """
+    Generate a PDF report about a person based on Wikipedia info, news, and tweet analysis.
+    
+    Args:
+        analyzer: TwitterAnalyzer instance
+        person_name: Name of the person
+        question: The question asked
+        answer: The answer generated
+        news_analysis: Optional news analysis text
+        
+    Returns:
+        Base64 encoded PDF content
+    """
+    # Get Wikipedia data
+    wiki_data = analyzer.get_wikipedia_data(person_name)
+    
+    # Get latest news
+    news_data = analyzer.get_news_with_gemini_search(person_name)
+    
+    # Get additional detailed info from Gemini
+    detailed_info = analyzer.get_with_gemini_search(
+        f"Provide structured information about {person_name} including: "
+        "Current Position, Political Affiliation, Election History, "
+        "Social Media Presence, Key Statements and Contributions, "
+        "Sentiment Summary (Based on Public Statements in the Last 12 Months), "
+        "and Engagement Summary (Last 12 Months)."
+    )
+    
+    # Function to clean and format text for PDF
+    def clean_text(text):
+        if text is None:
+            return ""
+        
+        # Replace problematic Unicode characters with ASCII equivalents
+        text = text.replace('\u2013', '-')  # en dash
+        text = text.replace('\u2014', '--')  # em dash
+        text = text.replace('\u2018', "'")   # left single quote
+        text = text.replace('\u2019', "'")   # right single quote
+        text = text.replace('\u201c', '"')   # left double quote
+        text = text.replace('\u201d', '"')   # right double quote
+        text = text.replace('\u2022', '*')   # bullet
+        text = text.replace('\u2026', '...') # ellipsis
+        
+        # Remove Markdown formatting (bold, italics, etc.)
+        text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)  # Remove bold formatting
+        text = re.sub(r'\*(.*?)\*', r'\1', text)      # Remove italic formatting
+        
+        # Use replace error handling to substitute characters that can't be encoded
+        return text.encode('latin-1', 'replace').decode('latin-1')
+    
+    # Function to process detailed information text to extract structured data
+    def parse_detailed_info(text):
+        if not text:
+            return []
+        
+        # Initialize results
+        sections = []
+        current_section = None
+        current_content = []
+        
+        # Split text into lines and process
+        lines = text.split('\n')
+        for line in lines:
+            # Clean the line
+            line = line.strip()
+            if not line:
+                continue
+                
+            # Check if line is a section header (starts with numbers or bold text)
+            if re.match(r'^\d+\.|\*\*[^:]+\*\*$', line):
+                # If we have a previous section, add it to the results
+                if current_section and current_content:
+                    sections.append((current_section, '\n'.join(current_content)))
+                    current_content = []
+                
+                # Extract section title (remove bold formatting and numbers)
+                current_section = re.sub(r'^\d+\.\s*|\*\*|\*', '', line)
+                
+            # Check if line is a subsection (key-value pair)
+            elif ':' in line and not line.endswith(':'):
+                key, value = line.split(':', 1)
+                # Remove bold formatting from key
+                key = re.sub(r'\*\*|\*', '', key).strip()
+                value = re.sub(r'\*\*|\*', '', value).strip()
+                
+                current_content.append(f"{key}: {value}")
+                
+            # Otherwise, treat as content for current section
+            else:
+                # Remove any remaining markdown
+                clean_line = re.sub(r'\*\*|\*', '', line)
+                current_content.append(clean_line)
+        
+        # Add the last section if it exists
+        if current_section and current_content:
+            sections.append((current_section, '\n'.join(current_content)))
+            
+        return sections
+    
+    # Create PDF
+    pdf = ReportPDF()
+    pdf.alias_nb_pages()
+    pdf.add_page()
+    
+    # Title
+    pdf.set_font('Arial', 'B', 16)
+    pdf.cell(0, 10, f"Analysis Report: {clean_text(person_name)}", 0, 1, 'C')
+    pdf.ln(5)
+    
+    # Biography section
+    pdf.chapter_title("Background")
+    if wiki_data:
+        # Extract the first paragraph for the brief
+        paragraphs = wiki_data["content"].split("\n\n")
+        brief = "\n\n".join(paragraphs[:1])  # First two paragraphs
+        pdf.chapter_body(clean_text(brief))
+    else:
+        pdf.chapter_body("No biographical information available.")
+    
+    # Detailed information section
+    pdf.chapter_title("Profile Details")
+    try:
+        if detailed_info:
+            # Parse the detailed info into sections
+            sections = parse_detailed_info(detailed_info)
+            
+            if sections:
+                for section_title, section_content in sections:
+                    pdf.section_title(section_title)
+                    pdf.chapter_body(clean_text(section_content))
+            else:
+                # Fallback to simple formatting
+                # Remove Markdown formatting
+                cleaned_info = re.sub(r'\*\*|\*', '', detailed_info)
+                pdf.chapter_body(clean_text(cleaned_info))
+        else:
+            pdf.chapter_body("No detailed profile information available.")
+    except Exception as e:
+        pdf.chapter_body(f"Error processing profile details: {str(e)}")
+    
+    # Latest news section
+    pdf.chapter_title("Latest News")
+    if news_analysis:
+        # Process news analysis to remove markdown and improve formatting
+        cleaned_news = clean_text(re.sub(r'\*\*([^*]+)\*\*', r'\1', news_analysis))
+        
+        # Split into sections
+        news_sections = re.split(r'(?:\*\*|\n)([A-Z][A-Za-z\s]+:)', cleaned_news)
+        
+        if len(news_sections) > 1:
+            current_section = None
+            for i, section in enumerate(news_sections):
+                if i == 0:  # First section is intro text
+                    if section.strip():
+                        pdf.chapter_body(section.strip())
+                elif i % 2 == 1:  # Odd indices are section titles
+                    current_section = section
+                    pdf.section_title(current_section)
+                else:  # Even indices are section content
+                    pdf.chapter_body(section.strip())
+        else:
+            pdf.chapter_body(cleaned_news)
+    else:
+        pdf.chapter_body("No recent news available.")
+    
+    # Question and answer section
+    pdf.chapter_title("Analysis")
+    pdf.section_title("Question")
+    pdf.chapter_body(clean_text(question))
+    
+    pdf.section_title("Answer")
+    pdf.chapter_body(clean_text(answer))
+    
+    # Get tweet data specifically about this person
+    try:
+        user_df = analyzer.df[analyzer.df['fullname'] == person_name]
+        if len(user_df) > 0:
+            pdf.chapter_title("Tweet Data Analysis")
+            pdf.section_title("Tweet Statistics")
+            stats_text = f"Total tweets analyzed: {len(user_df)}\n"
+            stats_text += f"Average likes per tweet: {user_df['likes'].mean():.1f}\n"
+            stats_text += f"Average replies per tweet: {user_df['replies'].mean():.1f}\n"
+            stats_text += f"Average retweets per tweet: {user_df['retweets'].mean():.1f}\n"
+            pdf.chapter_body(clean_text(stats_text))
+            
+            pdf.section_title("Recent Tweets")
+            for i, (_, row) in enumerate(user_df.head(5).iterrows(), 1):
+                tweet_text = f"{i}. \"{row['tweet']}\" (Likes: {row['likes']}, Replies: {row['replies']}, Retweets: {row['retweets']})"
+                pdf.chapter_body(clean_text(tweet_text))
+    except Exception as e:
+        pdf.chapter_body(f"Error processing tweet data: {str(e)}")
+    
+    # Generate PDF in memory using BytesIO
+    pdf_output = io.BytesIO()
+    # Use dest parameter with 'S' to specify it's a string output
+    pdf_data = pdf.output(dest='S').encode('latin-1')
+    
+    # Put the data into the BytesIO object
+    pdf_output.write(pdf_data)
+    pdf_output.seek(0)
+    
+    # Convert to base64 for embedding in HTML
+    b64_pdf = base64.b64encode(pdf_output.getvalue()).decode()
+    
+    return b64_pdf
+
 # Streamlit app
 def main():
     st.set_page_config(page_title="Twitter Data Analyzer", layout="wide", page_icon="🐦")
@@ -761,7 +1181,16 @@ def main():
                     height=400
                 )
                 st.plotly_chart(fig, use_container_width=True)
-            
+                status_col1, status_col2 = st.columns(2)
+                with status_col1:
+                    if st.session_state['vectorstore_initialized']:
+                        st.success("✅ Vector store initialized for semantic search")
+                    else:
+                        st.warning("⚠️ Vector store not initialized")
+                
+                with status_col2:
+                    st.success("✅ News integration active with Gemini")
+
             # Question Answering Tab
             with tab2:
                 st.header("Ask Questions About Your Data")
@@ -777,8 +1206,11 @@ def main():
                     "Who has the highest number of likes?",
                     "What are the main themes in Mahua Moitra's tweets?",
                     "What does Mahua Moitra say about the Waqf Act?",
-                    "What is the focus of Mahua Moitra's tweets?",
-                    "Summarize Mahua Moitra's tweets."
+                    "What is the latest news about Mahua Moitra?",
+                    "Why is Mahua Moitra tweeting about the Election Commission?",
+                    "What is the context behind Mahua Moitra's Waqf Act tweet?",
+                    "Compare Mahua Moitra's tweets with current news about her",
+                    "Summarize how Mahua Moitra's tweets relate to recent political events"
                 ]
                 
                 # Select example or enter custom question
@@ -794,11 +1226,49 @@ def main():
                     with st.spinner("Analyzing..."):
                         answer = analyzer.analyze(question)
                         
-                        # Add to conversation history
-                        st.session_state['conversation_history'].append({"question": question, "answer": answer})
+                        entities = analyzer.extract_entities(question)
+                        
                         
                         st.markdown("### Answer:")
                         st.markdown(answer)
+                        
+                        # Extract entities using the existing function in the analyzer
+                        # entities = analyzer.extract_entities(question)
+                        # Step 3: Get and display news separately
+                        with st.spinner("Checking latest news..."):
+                            news_analysis = analyzer.get_news_analysis(entities,question)
+                            if news_analysis:
+                                st.markdown("### Latest Related News:")
+                                st.markdown(news_analysis)
+                        
+                        # Add to conversation history
+                        st.session_state['conversation_history'].append({"question": question, "answer": answer,"entities": entities,"news": news_analysis})
+
+                        if entities:
+                            # Use the first entity as the main person for the report
+                            person_name = entities[0]
+                            
+                            st.markdown("---")
+                            st.markdown(f"### Generate PDF Report for {person_name}")
+                            
+                            # Generate PDF
+                            pdf_b64 = generate_person_pdf(analyzer, person_name, question, answer,news_analysis)
+                            
+                            # Create download link
+                            # download_link = create_download_link(pdf_b64, f"{person_name}_analysis.pdf")
+                            
+                            # Preview and download section
+                            st.markdown("**PDF Preview**")
+                            st.markdown(f"""
+                            <iframe
+                                title="PDF Preview"
+                                src="data:application/pdf;base64,{pdf_b64}"
+                                width="100%"
+                                height="500px"
+                                style="border: none;"
+                            ></iframe>
+                            """, unsafe_allow_html=True)
+                            
                 
                 # Show conversation history
                 if st.session_state['conversation_history']:
