@@ -143,7 +143,7 @@ class TwitterAnalyzer:
         
         # Gemini configuration with fixed API key
         self.gemini_api_key = "AIzaSyBHBFb7iJ4VNSazi_oNZ50pwSo8suH7Y4M"
-        self.gemini_model = "models/gemini-2.5-pro-exp-03-25"
+        self.gemini_model = "models/gemini-2.0-flash"
 
     def get_news_with_gemini_search(self, query):
         """
