@@ -29,3 +29,7 @@ typing-extensions>=4.0.0  # For enhanced type hints
 
 
 wikipedia==1.4.0
+
+requests
+fpdf
+
